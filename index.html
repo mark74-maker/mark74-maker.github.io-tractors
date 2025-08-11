@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Terrible Tractors – OutRun Retro</title>
+<style>
+:root{
+  --bg:#0b1020; --ui:#e5e7f2; --road:#2b2f3c; --lane:#b4b7c9; --ramp:#ffd166;
+}
+html,body{height:100%;margin:0;background:#0a0e1e;color:var(--ui);font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Ubuntu,"Helvetica Neue",Arial,sans-serif}
+.wrap{display:grid;place-items:center;height:100%}
+.screen{position:relative;width:min(95vw,1000px);height:min(68vh,640px);max-width:1100px;border-radius:18px;overflow:hidden;background:#0b1330;box-shadow:0 20px 60px rgba(0,0,0,.45), inset 0 0 0 1px rgba(255,255,255,.06)}
+canvas{position:absolute;inset:0;width:100%;height:100%;image-rendering: pixelated; /* emphasize chunky pixels when we upscale */}
+.scanlines{position:absolute;inset:0;pointer-events:none;opacity:.16;background:repeating-linear-gradient(0deg,rgba(255,255,255,.08) 0px, rgba(255,255,255,.08) 1px, transparent 2px, transparent 4px);mix-blend-mode:overlay}
+.vignette{position:absolute;inset:-6%;pointer-events:none;background:radial-gradient(120% 85% at 50% 50%, transparent 60%, rgba(0,0,0,.45) 85%)}
+.retro-on .screen{filter:saturate(1.15) contrast(1.12) hue-rotate(-5deg)}
+.hud{position:fixed;inset:16px auto auto 16px;display:flex;gap:12px;align-items:center;font-weight:600}
+.card{backdrop-filter: blur(6px);background:rgba(12,20,48,.35);border:1px solid rgba(255,255,255,.08);padding:10px 14px;border-radius:12px;box-shadow:0 6px 20px rgba(0,0,0,.25)}
+.right{position:fixed;inset:16px 16px auto auto;display:flex;gap:10px;align-items:center}
+.btn{cursor:pointer;border:none;border-radius:10px;padding:10px 14px;background:linear-gradient(180deg,#1f274a,#141a34);color:var(--ui);font-weight:700;letter-spacing:.2px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08),0 8px 24px rgba(0,0,0,.35)}
+.btn:active{transform:translateY(1px)}
+.help{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);max-width:min(92vw,1000px);line-height:1.35}
+.kbd{display:inline-block;min-width:1.8ch;text-align:center;padding:.1rem .35rem;border-radius:.5rem;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15)}
+.banner{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);text-align:center}
+.title{font-size:clamp(28px,4vw,46px);font-weight:900;letter-spacing:.8px;margin:6px 0 8px}
+.subtitle{opacity:.85;margin:0 0 14px}
+.small{font-size:.9rem;opacity:.85}
+.hidden{display:none}
+.toast{position:fixed;left:50%;top:12%;transform:translateX(-50%);padding:10px 14px;border-radius:11px;background:rgba(0,0,0,.5);border:1px solid rgba(255,255,255,.14);opacity:0;transition:opacity .25s ease;pointer-events:none}
+.toast.show{opacity:1}
+</style>
+</head>
+<body class="retro-on">
+  <div class="wrap">
+    <div class="screen">
+      <canvas id="game" width="960" height="600" aria-label="Terrible Tractors game area"></canvas>
+      <div class="scanlines" aria-hidden="true"></div>
+      <div class="vignette" aria-hidden="true"></div>
+    </div>
+  </div>
+
+  <div class="hud">
+    <div class="card">Score: <span id="score">0</span></div>
+    <div class="card">Speed: <span id="speed">1.0x</span></div>
+    <div class="card">Stage: <span id="stage">Road</span></div>
+  </div>
+
+  <div class="right">
+    <button class="btn" id="retroBtn" aria-label="Toggle Retro">🕹️ Retro ✓</button>
+    <button class="btn" id="pauseBtn" aria-label="Pause">⏸️ Pause</button>
+    <button class="btn" id="restartBtn" aria-label="Restart">🔁 Restart</button>
+  </div>
+
+  <div class="help card">
+    <b>Controls:</b> <span class="kbd">Z</span>/<span class="kbd">X</span> steer · <span class="kbd">Space</span> boost · <span class="kbd">P</span> pause · <span class="kbd">R</span> restart
+  </div>
+
+  <div id="startBanner" class="banner">
+    <div class="card" style="padding:18px 22px;">
+      <div style="font-size:46px">🐶🏍️🌴🌅</div>
+      <div class="title">Terrible Tractors</div>
+      <div class="subtitle">80s pixel OutRun vibes: front-on vintage bike, tropical roadside, monster tractors, ramps, barks and bleeps.</div>
+      <div class="small">Press <span class="kbd">Space</span> to start · <span class="kbd">Z</span>/<span class="kbd">X</span> to steer</div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast">WOOF! +10</div>
+
+<script>
+(()=>{
+  // --- Canvas: low-res offscreen for chunky pixels ---
+  const canvas = document.getElementById('game');
+  const scr = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const LOW_W = 320, LOW_H = 200; // classic-ish pixel canvas
+  const lo = document.createElement('canvas'); lo.width = LOW_W; lo.height = LOW_H;
+  const ctx = lo.getContext('2d');
+  scr.imageSmoothingEnabled = false; ctx.imageSmoothingEnabled = false;
+
+  // --- UI ---
+  const scoreEl = document.getElementById('score');
+  const speedEl = document.getElementById('speed');
+  const stageEl = document.getElementById('stage');
+  const startBanner = document.getElementById('startBanner');
+  const toast = document.getElementById('toast');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const restartBtn = document.getElementById('restartBtn');
+  const retroBtn = document.getElementById('retroBtn');
+
+  // --- Road + perspective ---
+  const LANES = 5;
+  const ROAD_W_TOP = LOW_W*0.14;  // horizon width
+  const ROAD_W_BOTTOM = LOW_W*0.8; // near width
+  const HORIZON = LOW_H*0.28;
+
+  const BOOST_MULT = 1.5;
+  const TURN_SPEED = 0.10; // slower lateral feel
+
+  const STAGE = { ROAD:'Road', HARVEST:'Harvest', FINAL:'Finale', CELEB:'Celebrate' };
+
+  const rand=(a,b)=>Math.random()*(b-a)+a;
+  const clamp=(v,a,b)=>v<a?a:(v>b?b:v);
+
+  // --- Audio (8-bit-ish) ---
+  let ac=null, engineOsc=null, engineGain=null;
+  function ensureAudio(){
+    if(!ac){
+      ac = new (window.AudioContext||window.webkitAudioContext)();
+      // engine hum
+      engineOsc = ac.createOscillator(); engineGain = ac.createGain();
+      engineOsc.type = 'square'; engineOsc.frequency.value = 120; // idle
+      engineGain.gain.value = 0.0; // start muted
+      engineOsc.connect(engineGain).connect(ac.destination);
+      engineOsc.start();
+    }
+  }
+  function beep(freq=440, dur=0.12, type='square', vol=0.2){ if(!ac) return; const o=ac.createOscillator(); const g=ac.createGain(); o.type=type; o.frequency.value=freq; g.gain.value=vol; o.connect(g).connect(ac.destination); o.start(); o.stop(ac.currentTime+dur); g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime+dur); }
+  function bark(){ // two-tone woof
+    beep(650,0.06,'square',0.25); setTimeout(()=>beep(420,0.09,'square',0.22),60);
+  }
+  function coin(){ beep(900,0.06,'square',0.18); setTimeout(()=>beep(1200,0.05,'square',0.14),55); }
+  function crashSfx(){ if(!ac) return; const bsz=ac.sampleRate*0.2; const buf=ac.createBuffer(1,bsz,ac.sampleRate); const d=buf.getChannelData(0); for(let i=0;i<bsz;i++){ d[i]=(Math.random()*2-1)*(1-i/bsz); } const s=ac.createBufferSource(); const g=ac.createGain(); g.gain.value=0.3; s.buffer=buf; s.connect(g).connect(ac.destination); s.start(); }
+
+  // --- Input ---
+  const keys = new Set();
+  addEventListener('keydown',e=>{
+    if(['Space','ArrowLeft','ArrowRight','KeyZ','KeyX','KeyP','KeyR'].includes(e.code)) e.preventDefault();
+    keys.add(e.code);
+    if(e.code==='Space') { ensureAudio(); if(ac?.state==='suspended') ac.resume(); }
+    if(e.code==='Space' && state.paused && !state.started){ state.started=true; startBanner.classList.add('hidden'); state.paused=false; }
+    if(e.code==='KeyP') togglePause();
+    if(e.code==='KeyR') restart();
+  });
+  addEventListener('keyup',e=>keys.delete(e.code));
+
+  pauseBtn.onclick=()=>togglePause();
+  restartBtn.onclick=()=>restart();
+  retroBtn.onclick=()=>{ document.body.classList.toggle('retro-on'); retroBtn.textContent = document.body.classList.contains('retro-on')?'🕹️ Retro ✓':'🕹️ Retro'; };
+
+  function togglePause(){ if(state.stage===STAGE.CELEB) return; state.paused=!state.paused; pauseBtn.textContent = state.paused? '▶️ Resume':'⏸️ Pause'; }
+  function restart(){ Object.assign(state, initialState()); pauseBtn.textContent='⏸️ Pause'; startBanner.classList.remove('hidden'); }
+
+  // --- Entities ---
+  class Bike{
+    constructor(){ this.lane=2; this.x=laneToX(2); this.targetLane=2; this.jumpT=0; this.jumpDur=0.9; }
+    update(dt){
+      const L = keys.has('ArrowLeft')||keys.has('KeyZ');
+      const R = keys.has('ArrowRight')||keys.has('KeyX');
+      if(L&&!R) this.targetLane = clamp(this.targetLane-1,0,LANES-1);
+      if(R&&!L) this.targetLane = clamp(this.targetLane+1,0,LANES-1);
+      const tx = laneToX(this.targetLane);
+      this.x += (tx-this.x) * (TURN_SPEED*(1+state.speed*0.04));
+      if(this.jumpT>0){ this.jumpT+=dt; if(this.jumpT>=this.jumpDur) this.jumpT=0; }
+    }
+    airborne(){ return this.jumpT>0; }
+    draw(){
+      const y=LOW_H*0.82; // near bottom
+      const bob = this.airborne()? 2*Math.sin((this.jumpT/this.jumpDur)*Math.PI):0;
+      ctx.save(); ctx.translate(this.x,y-bob);
+      // FRONT VIEW bike: tyre, forks, headlamp, bars, dog centered
+      // front tyre
+      ctx.fillStyle='#0f1420'; ctx.beginPath(); ctx.ellipse(0,12,10,10,0,0,Math.PI*2); ctx.fill();
+      // forks
+      ctx.strokeStyle='#c3d2ff'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(-6,6); ctx.lineTo(-2,-6); ctx.moveTo(6,6); ctx.lineTo(2,-6); ctx.stroke();
+      // headlamp
+      ctx.fillStyle='#fffbcc'; ctx.beginPath(); ctx.arc(0,-6,7,0,Math.PI*2); ctx.fill();
+      // bars
+      ctx.strokeStyle='#a6b8ff'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(-14,-12); ctx.lineTo(14,-12); ctx.stroke();
+      // tank
+      ctx.fillStyle='#66d0ff'; roundedRect(-8,-20,16,8,3); ctx.fill();
+      // dog front-on
+      drawDogFront(0,-28);
+      ctx.restore();
+    }
+  }
+
+  function drawDogFront(dx,dy){
+    ctx.save(); ctx.translate(dx,dy);
+    // head
+    ctx.fillStyle='#f1c8a6'; ctx.beginPath(); ctx.arc(0,-2,8,0,Math.PI*2); ctx.fill();
+    // ears
+    ctx.fillStyle='#c79d7c'; ctx.beginPath(); ctx.ellipse(-6,-6,3,5,0,0,Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.ellipse(6,-6,3,5,0,0,Math.PI*2); ctx.fill();
+    // helmet
+    ctx.fillStyle='#2b6cf0'; ctx.beginPath(); ctx.arc(0,-4,9,Math.PI,0); ctx.fill();
+    // goggles
+    ctx.fillStyle='#111821'; roundedRect(-8,-5,7,5,1.5); ctx.fill(); roundedRect(1,-5,7,5,1.5); ctx.fill();
+    ctx.fillStyle='#8fd3ff'; roundedRect(-7,-4,5,3,1); ctx.fill(); roundedRect(2,-4,5,3,1); ctx.fill();
+    // muzzle + nose
+    ctx.fillStyle='#eac1a2'; roundedRect(-4,1,8,4,2); ctx.fill(); ctx.fillStyle='#111821'; ctx.beginPath(); ctx.arc(0,3,1.6,0,Math.PI*2); ctx.fill();
+    // tiny scarf
+    ctx.fillStyle='#ff6f61'; roundedRect(-4,8,8,2,1); ctx.fill();
+    ctx.restore();
+  }
+
+  class Tractor{ constructor(lane,speed,monster=true){ this.lane=lane; this.z=0; this.speed=speed; this.monster=monster; this.passed=false; }
+    update(dt){ this.z += dt*this.speed*state.speed; }
+    off(){ return this.z>1.2; }
+    draw(){ const p=projectLane(this.lane,this.z); ctx.save(); ctx.translate(p.x,p.y); ctx.scale(p.s,p.s); drawTractor(this.monster); ctx.restore(); } }
+  class Combine{ constructor(lane,speed,boss=false){ this.lane=lane; this.z=0; this.speed=speed; this.boss=boss; }
+    update(dt){ this.z += dt*this.speed*state.speed*1.1; }
+    off(){ return this.z>1.2; }
+    draw(){ const p=projectLane(this.lane,this.z); ctx.save(); ctx.translate(p.x,p.y); ctx.scale(p.s*1.25,p.s*1.25); drawCombine(this.boss); ctx.restore(); } }
+  class Ramp{ constructor(lane){ this.lane=lane; this.z=0; this.speed=0.9; }
+    update(dt){ this.z += dt*this.speed*state.speed; }
+    off(){ return this.z>1.1; }
+    draw(){ const p=projectLane(this.lane,this.z); ctx.save(); ctx.translate(p.x,p.y+8); ctx.scale(p.s,p.s); drawRamp(); ctx.restore(); } }
+  class Billboard{ constructor(side){ this.side=side; this.z=0; this.speed=0.45; const ads=[{h1:'K9 CRUNCH',h2:'DOG FOOD',c:'#ffdc5d'},{h1:'BARK-O-LUBE',h2:'MOTO OIL',c:'#9bf6ff'},{h1:'VINTAGE',h2:'MOTORBIKES',c:'#ffd6a5'}]; const p=ads[(Math.random()*ads.length)|0]; this.h1=p.h1; this.h2=p.h2; this.c=p.c; }
+    update(dt){ this.z += dt*this.speed*(1+state.speed*0.05); }
+    off(){ return this.z>1.15; }
+    draw(){ const p=projectSide(this.side,this.z); ctx.save(); ctx.translate(p.x,p.y); ctx.scale(p.s,p.s); ctx.fillStyle='#6c7a89'; ctx.fillRect(-3,0,6,40); ctx.save(); ctx.translate(0,-8); ctx.rotate(this.side*-0.06); ctx.fillStyle=this.c; roundedRect(-46,-30,92,60,6); ctx.fill(); ctx.strokeStyle='rgba(0,0,0,.35)'; ctx.stroke(); ctx.fillStyle='#1c2238'; ctx.textAlign='center'; ctx.font='bold 10px monospace'; ctx.fillText(this.h1,0,-4); ctx.font='700 9px monospace'; ctx.fillText(this.h2,0,10); ctx.restore(); ctx.restore(); } }
+  class Palm{ constructor(side){ this.side=side; this.z=0; this.speed=0.48; this.h=rand(0.8,1.2);} update(dt){ this.z += dt*this.speed*(1+state.speed*0.05);} off(){ return this.z>1.1;} draw(){ const p=projectSide(this.side,this.z); ctx.save(); ctx.translate(p.x,p.y); ctx.scale(p.s*this.h,p.s*this.h); // trunk
+      ctx.fillStyle='#7b4b2a'; ctx.fillRect(-2,0,4,28); // leaves
+      ctx.fillStyle='#1fbf66'; for(let i=0;i<5;i++){ ctx.beginPath(); ctx.moveTo(0,0); const ang=-0.8+i*0.4*this.side; ctx.lineTo(24*Math.cos(ang), -8+24*Math.sin(ang)); ctx.lineTo(10*Math.cos(ang+0.15), -4+10*Math.sin(ang+0.15)); ctx.closePath(); ctx.fill(); }
+      ctx.restore(); } }
+  class CheerDog{ constructor(x,y){this.x=x;this.y=y;this.vy= -rand(1.8,3.6);this.g=0.18;} update(){ this.y+=this.vy; this.vy+=this.g; if(this.y>LOW_H-40){ this.y=LOW_H-40; this.vy*=-0.6; } } draw(){ ctx.save(); ctx.translate(this.x,this.y); drawDogFront(0,0); ctx.fillStyle='#f5c542'; ctx.beginPath(); ctx.arc(12,0,4,0,Math.PI*2); ctx.fill(); ctx.fillRect(10,5,3,6); ctx.fillRect(6,11,10,4); ctx.restore(); } }
+
+  // --- Drawing primitives ---
+  function roundedRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+
+  function drawScene(){
+    // clear lo canvas
+    ctx.clearRect(0,0,LOW_W,LOW_H);
+    drawSkySunset();
+    drawRoad();
+
+    // draw far objects
+    const all=[ ...state.palms.map(p=>({z:p.z,draw:()=>p.draw()})), ...state.billboards.map(b=>({z:b.z,draw:()=>b.draw()})), ...state.ramps.map(r=>({z:r.z,draw:()=>r.draw()})), ...state.obstacles.map(o=>({z:o.z,draw:()=>o.draw()})) ].sort((a,b)=>a.z-b.z);
+    for(const a of all) a.draw();
+    state.bike.draw();
+    if(state.stage===STAGE.CELEB) for(const c of state.cheers) c.draw();
+
+    // blit to screen scaled
+    scr.clearRect(0,0,W,H);
+    scr.drawImage(lo,0,0,W,H);
+  }
+
+  function drawSkySunset(){
+    // big outrun sun with stripes
+    const g=ctx.createLinearGradient(0,0,0,LOW_H);
+    g.addColorStop(0,'#1a1040'); g.addColorStop(0.35,'#38126b'); g.addColorStop(0.7,'#ff006e'); g.addColorStop(1,'#ff8e00');
+    ctx.fillStyle=g; ctx.fillRect(0,0,LOW_W,LOW_H);
+    // sun
+    const sx=LOW_W/2, sy=HORIZON-10; const r=36;
+    ctx.fillStyle='#ffd166'; ctx.beginPath(); ctx.arc(sx,sy,r,0,Math.PI*2); ctx.fill();
+    // stripes
+    ctx.fillStyle='#0b1330'; for(let i=-r;i<r;i+=6){ const w=Math.sqrt(r*r - i*i); ctx.fillRect(sx-w,sy+i,2*w,2); }
+  }
+
+  function drawRoad(){
+    ctx.save();
+    // shoulders (sand) 
+    ctx.fillStyle='#403315'; ctx.beginPath(); ctx.moveTo((LOW_W-ROAD_W_TOP)/2-14,HORIZON);
+    ctx.lineTo((LOW_W+ROAD_W_TOP)/2+14,HORIZON);
+    ctx.lineTo((LOW_W+ROAD_W_BOTTOM)/2+24,LOW_H);
+    ctx.lineTo((LOW_W-ROAD_W_BOTTOM)/2-24,LOW_H); ctx.closePath(); ctx.fill();
+
+    // road polygon
+    const rg=ctx.createLinearGradient(0,HORIZON,0,LOW_H);
+    rg.addColorStop(0,'#2a2e39'); rg.addColorStop(1,'#20222b');
+    ctx.fillStyle=rg; ctx.beginPath(); ctx.moveTo((LOW_W-ROAD_W_TOP)/2,HORIZON); ctx.lineTo((LOW_W+ROAD_W_TOP)/2,HORIZON); ctx.lineTo((LOW_W+ROAD_W_BOTTOM)/2,LOW_H); ctx.lineTo((LOW_W-ROAD_W_BOTTOM)/2,LOW_H); ctx.closePath(); ctx.fill();
+
+    // lane lines
+    ctx.strokeStyle='#eae9ff'; ctx.lineWidth=1;
+    for(let i=1;i<LANES;i++){ const t=i/LANES; const xTop=LOW_W/2-ROAD_W_TOP/2+ROAD_W_TOP*t; const xBottom=LOW_W/2-ROAD_W_BOTTOM/2+ROAD_W_BOTTOM*t; ctx.beginPath(); ctx.moveTo(xTop,HORIZON); ctx.lineTo(xBottom,LOW_H); ctx.stroke(); }
+    ctx.restore();
+  }
+
+  function drawTractor(monster){ ctx.fillStyle = monster? '#dc2f5a' : '#8892b0'; roundedRect(-20,-14,40,28,6); ctx.fill(); ctx.fillStyle='#5ad1ff'; roundedRect(-10,-22,20,12,4); ctx.fill(); ctx.fillStyle='#161925'; ctx.beginPath(); ctx.ellipse(-12,12,8,8,0,0,Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.ellipse(12,12,8,8,0,0,Math.PI*2); ctx.fill(); if(monster){ ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(-6,-6,3,0,Math.PI*2); ctx.arc(6,-6,3,0,Math.PI*2); ctx.fill(); ctx.fillStyle='#111'; ctx.beginPath(); ctx.arc(-6,-6,1.6,0,Math.PI*2); ctx.arc(6,-6,1.6,0,Math.PI*2); ctx.fill(); ctx.fillStyle='#ffe08a'; roundedRect(-8,-1,16,6,2); ctx.fill(); }
+  function drawCombine(boss){ ctx.fillStyle = boss? '#ff7a00' : '#2bd676'; roundedRect(-28,-18,56,36,6); ctx.fill(); ctx.fillStyle='#71e2ff'; roundedRect(-14,-28,28,16,4); ctx.fill(); ctx.fillStyle='#161925'; ctx.beginPath(); ctx.ellipse(-18,16,9,9,0,0,Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.ellipse(18,16,9,9,0,0,Math.PI*2); ctx.fill(); ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.beginPath(); for(let i=-24;i<=24;i+=6){ ctx.moveTo(i,6); ctx.lineTo(i+3,10);} ctx.stroke(); if(boss){ ctx.fillStyle='#000'; ctx.beginPath(); ctx.arc(0,-6,5,0,Math.PI*2); ctx.fill(); } }
+  function drawRamp(){ ctx.fillStyle= 'rgba(255,209,102,0.95)'; ctx.beginPath(); ctx.moveTo(-14,8); ctx.lineTo(14,8); ctx.lineTo(10,-2); ctx.lineTo(-10,2); ctx.closePath(); ctx.fill(); }
+
+  function laneToX(l){ const left=(LOW_W-ROAD_W_BOTTOM)/2, per=ROAD_W_BOTTOM/LANES; return left + per*(l+0.5); }
+  function projectLane(l,z){ const rw=ROAD_W_TOP+(ROAD_W_BOTTOM-ROAD_W_TOP)*z; const x=LOW_W/2-rw/2+rw*(l+0.5)/LANES; const y=HORIZON+(LOW_H-HORIZON)*z; const s=0.28+z*1.05; return {x,y,s}; }
+  function projectSide(side,z){ const rw=ROAD_W_TOP+(ROAD_W_BOTTOM-ROAD_W_TOP)*z; const edge = (side<0? (LOW_W/2-rw/2):(LOW_W/2+rw/2)); const off=20+18*z; const x=edge + side*(off); const y=HORIZON+(LOW_H-HORIZON)*z; const s=0.25+z*0.9; return {x,y,s}; }
+
+  function initialState(){ return { started:false, paused:true, stage:STAGE.ROAD, bike:new Bike(), obstacles:[], ramps:[], billboards:[], palms:[], cheers:[], spawnT:0, rampT:0, billT:0, palmT:0, score:0, speed:1, finalQueue:0, gameOver:false }; }
+  const state = initialState();
+
+  function spawnWave(dt){
+    if(state.stage===STAGE.ROAD || state.stage===STAGE.HARVEST){
+      state.spawnT -= dt; const target = state.stage===STAGE.ROAD ? (0.9 - Math.min(0.5, state.score/120)) : 0.6; if(state.spawnT<=0){ const lane=(Math.random()*LANES)|0; (state.stage===STAGE.ROAD) ? state.obstacles.push(new Tractor(lane, rand(0.35,0.5), true)) : state.obstacles.push(new Combine(lane, rand(0.38,0.52), false)); state.spawnT=target; }
+    }
+    if(state.stage!==STAGE.FINAL && state.stage!==STAGE.CELEB){ state.rampT -= dt; if(state.rampT<=0){ state.ramps.push(new Ramp((Math.random()*LANES)|0)); state.rampT = rand(2.2,4.0);} state.billT -= dt; if(state.billT<=0){ state.billboards.push(new Billboard(Math.random()<.5?-1:1)); state.billT = rand(1.6,2.6);} state.palmT -= dt; if(state.palmT<=0){ state.palms.push(new Palm(Math.random()<.5?-1:1)); state.palmT = rand(0.6,1.0);} }
+    if(state.stage===STAGE.FINAL && state.finalQueue>0){ state.spawnT -= dt; if(state.spawnT<=0){ const remain=state.finalQueue; if(remain>1){ state.obstacles.push(new Combine((Math.random()*LANES)|0, 0.55, false)); state.spawnT=0.55; } else { const bossLane=(Math.random()*LANES)|0; state.ramps.push(new Ramp(bossLane)); state.ramps[state.ramps.length-1].z=-0.08; state.obstacles.push(new Combine(bossLane, 0.6, true)); state.spawnT=2; } state.finalQueue--; } }
+  }
+
+  function handleInteractions(){
+    for(const r of state.ramps){ const pr=projectLane(r.lane,r.z), dx=Math.abs(state.bike.x-pr.x); if(!state.bike.airborne() && r.z>0.78 && r.z<0.95 && dx<16){ state.bike.jumpT=0.01; toastMsg('WOOF! +10'); bark(); }
+    }
+    for(const o of state.obstacles){ const p=projectLane(o.lane,o.z); if(!o.passed && p.y>LOW_H*0.84){ o.passed=true; addScore(state.bike.airborne()?10:5); coin(); if(state.stage===STAGE.ROAD && state.score>=50){ state.stage=STAGE.HARVEST; stageEl.textContent=state.stage; } if(state.stage===STAGE.HARVEST && state.score>=70){ state.stage=STAGE.FINAL; stageEl.textContent=state.stage; state.finalQueue=4; state.spawnT=0.6; } }
+      if(!state.bike.airborne()){ const dx=Math.abs(state.bike.x-p.x), dy=Math.abs(LOW_H*0.82 - p.y), hit=dx<32*p.s && dy<22*p.s; if(hit){ flash(); crashSfx(); return crash(); } }
+    }
+    if(state.stage===STAGE.FINAL){ for(const o of state.obstacles){ if(o instanceof Combine && o.boss){ const p=projectLane(o.lane,o.z); if(p.y>LOW_H*0.84 && !state.gameOver){ if(state.bike.airborne()){ addScore(20); coin(); return celebrate(); } else { flash(); crashSfx(); return crash(); } } } }
+  }
+
+  function addScore(n){ state.score+=n; scoreEl.textContent=state.score; }
+  function toastMsg(t){ toast.textContent=t; toast.classList.add('show'); clearTimeout(toastMsg._t); toastMsg._t=setTimeout(()=>toast.classList.remove('show'),520); }
+  function flash(){ canvas.style.filter='saturate(2) brightness(1.6)'; setTimeout(()=>canvas.style.filter='none',180); }
+  function celebrate(){ state.stage=STAGE.CELEB; stageEl.textContent='Victory!'; state.gameOver=true; state.paused=true; for(let i=0;i<26;i++) state.cheers.push(new CheerDog(rand(20,LOW_W-20), rand(LOW_H*0.35,LOW_H*0.75))); setTimeout(()=>{ startBanner.classList.remove('hidden'); startBanner.querySelector('.title').textContent='Victory!'; startBanner.querySelector('.subtitle').textContent='You cleared the Terrible Harvest. The pack is proud.'; },200); }
+  function crash(){ state.gameOver=true; state.paused=true; stageEl.textContent='Crashed'; startBanner.classList.remove('hidden'); startBanner.querySelector('.title').textContent='Crash!'; startBanner.querySelector('.subtitle').textContent='A tractor ended your run. Press Space to try again.'; }
+
+  // --- Loop ---
+  let last=performance.now();
+  function loop(ts){
+    const dt=Math.min(0.04,(ts-last)/1000); last=ts;
+    if(!state.paused && state.started){
+      const boosting=keys.has('Space'); state.speed=(1+Math.min(0.8,state.score/150))*(boosting?BOOST_MULT:1); speedEl.textContent=state.speed.toFixed(2)+'x';
+      // engine tone follows speed
+      if(engineGain){ engineGain.gain.value = 0.08 + (boosting?0.06:0); engineOsc.frequency.setTargetAtTime(80 + state.speed*80, ac.currentTime||0, 0.05); }
+      state.bike.update(dt);
+      spawnWave(dt);
+      for(const o of state.obstacles) o.update(dt);
+      for(const r of state.ramps) r.update(dt);
+      for(const b of state.billboards) b.update(dt);
+      for(const p of state.palms) p.update(dt);
+      for(const c of state.cheers) c.update();
+      handleInteractions();
+      state.obstacles = state.obstacles.filter(o=>!o.off());
+      state.ramps = state.ramps.filter(r=>!r.off());
+      state.billboards = state.billboards.filter(b=>!b.off());
+      state.palms = state.palms.filter(p=>!p.off());
+    }
+    drawScene();
+    requestAnimationFrame(loop);
+  }
+
+  // --- Stars not needed; OutRun sky handled in drawSkySunset ---
+
+  // --- Init ---
+  function initialAudioNote(){ /* placeholder to keep structure tidy */ }
+
+  function initialState(){ return { started:false, paused:true, stage:STAGE.ROAD, bike:new Bike(), obstacles:[], ramps:[], billboards:[], palms:[], cheers:[], spawnT:0, rampT:0, billT:0, palmT:0, score:0, speed:1, finalQueue:0, gameOver:false }; }
+  const state = initialState();
+  stageEl.textContent=state.stage;
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
